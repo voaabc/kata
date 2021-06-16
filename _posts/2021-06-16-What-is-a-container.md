@@ -11,7 +11,6 @@ tags: Docker
 
 
 
-
 ### Processes 进程
 
 Containers are just normal Linux Processes with additional configuration applied. Launch the following Redis container so we can see what is happening under the covers.
@@ -27,7 +26,7 @@ Docker can help us identify information about the process including the PID (Pro
 > Docker可以通过`docker top db`帮助我们识别有关包括PID（进程ID）和PPID（父进程ID）的进程的信息
 
 Who is the PPID? Use `ps aux | grep <ppid>` to find the parent process. Likely to be Containerd.
-> PPID是谁？使用ps aux | grep<ppid>查找父进程。可能是容器。
+> PPID是谁？使用`ps aux | grep<ppid>`查找父进程。可能是容器。
 
 The command pstree will list all of the sub processes. See the Docker process tree using `pstree -c -p -A $(pgrep dockerd)`
 > 命令pstree将列出所有子进程。使用`pstree-c-p-A$（pgrep dockerd）`查看Docker进程树
