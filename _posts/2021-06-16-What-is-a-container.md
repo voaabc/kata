@@ -92,16 +92,125 @@ Without using a runtime such as Docker, a process can still operate within it's 
 `unshare --help`
 
 With unshare it's possible to launch a process and have it create a new namespace, such as Pid. By unsharing the Pid namespace from the host, it looks like the bash prompt is the only process running on the machine. 
+> 使用unshare可以启动一个进程并让它创建一个新的名称空间，比如Pid。通过从主机取消共享Pid名称空间，看起来bash提示符是机器上运行的唯一进程。
+
+`sudo unshare --fork --pid --mount-proc bash`
+`ps`
+`exit`
+
+#### What happens when we share a namespace?
+Under the covers, Namespaces are inode locations on disk. This allows for processes to shared/reused the same namespace, allowing them to view and interact.
+> 实际上，命名空间是磁盘上的inode位置。这允许进程共享/重用同一个命名空间，允许它们查看和交互。
+
+List all the namespaces with `ls -lha /proc/$DBPID/ns/`
+> 列出所有名称空间 `ls -lha /proc/$DBPID/ns/`
+
+Another tool, NSEnter is used to attach processes to existing Namespaces. Useful for debugging purposes.
+> 另一个工具，NSEnter用于将进程附加到现有命名空间。 用于调试目的。
+
+`nsenter --help`
+
+`nsenter --target $DBPID --mount --uts --ipc --net --pid ps aux`
+
+With Docker, these namespaces can be shared using the syntax container:<container-name>. For example, the command below will connect nginx to the DB namespace.
+> 在Docker中，可以使用语法container:<container-name>共享这些命名空间。例如，下面的命令将nginx连接到DB命名空间。
 
 ```
-sudo unshare --fork --pid --mount-proc bash
-ps
-exit
+docker run -d --name=web --net=container:db nginx:alpine
+WEBPID=$(pgrep nginx | tail -n1)
+echo nginx is $WEBPID
+cat /proc/$WEBPID/cgroup
 ```
 
+While the net has been shared, it will still be listed as a namespace. 
+> 虽然网络已被共享，但它仍将作为命名空间列出。
+
+`ls -lha /proc/$WEBPID/ns/`
+
+However, the net namespace for both processes points to the same location.
+> 但是，两个进程的net命名空间指向相同的位置
+
+`ls -lha /proc/$WEBPID/ns/ | grep net`
+`ls -lha /proc/$DBPID/ns/ | grep net`
+
+### Chroot
+An important part of a container process is the ability to have different files that are independent of the host. This is how we can have different Docker Images based on different operating systems running on our system.
+> 容器进程的一个重要部分是能够拥有独立于主机的不同文件。这就是我们如何在系统上运行基于不同操作系统的不同Docker映像。
+
+Chroot provides the ability for a process to start with a different root directory to the parent OS. This allows different files to appear in the root.
+> Chroot提供了一种能力，让进程可以从父操作系统的不同根目录开始。这允许不同的文件出现在根目录中。
+
+By writing to the file, we can change the limit limits of a process.
+> 通过写入文件，我们可以更改进程的限制范围。
+
+`echo 8000000 > /sys/fs/cgroup/memory/docker/$DBID/memory.limit_in_bytes`
+
+If you read the file back, you'll notice it's been converted to 7999488. 
+> 如果您读回该文件，您会注意到它已被转换为7999488。
+
+`cat /sys/fs/cgroup/memory/docker/$DBID/memory.limit_in_bytes`
+
+When checking Docker Stats again, the memory limit of the process is now 7.629M 
+> 再次检查Docker Stats时，该进程的内存现在限制为7.629M
+
+`docker stats db --no-stream`
+
+### Seccomp / AppArmor
+All actions with Linux is done via syscalls. The kernel has 330 system calls that perform operations such as read files, close handles and check access rights. All applications use a combination of these system calls to perform the required operations.
+> Linux的所有操作都是通过系统调用完成的。内核有330个系统调用来执行诸如读取文件、关闭句柄和检查访问权限等操作。所有应用程序都使用这些系统调用的组合来执行所需的操作。
+
+AppArmor is a application defined profile that describes which parts of the system a process can access.
+> AppArmor是应用程序定义的概要文件，描述进程可以访问系统的哪些部分。
+
+It's possible to view the current AppArmor profile assigned to a process via `cat /proc/$DBPID/attr/current`
+> 可以通过`cat/proc/$DBPID/attr/current`查看分配给进程的当前AppArmor配置文件
+
+The default AppArmor profile for Docker is docker-default (enforce).
+> Docker默认的AppArmor配置文件是Docker -default (enforce)。
+
+Prior to Docker 1.13, it stored the AppArmor Profile in /etc/apparmor.d/docker-default (which was overwritten when Docker started, so users couldn't modify it). After v1.13, Docker now generates docker-default in tmpfs, uses apparmor_parser to load it into kernel, then deletes the file
+> 在Docker1.13之前，它将AppArmor配置文件存储在/etc/AppArmor.d/Docker-default中（Docker启动时会被覆盖，因此用户无法修改它）。在v1.13之后，Docker现在在tmpfs中生成Docker默认值，使用Apparmoru解析器将其加载到内核中，然后删除该文件
+
+The template can be found at 
+> 模板可在以下位置找到：
+
+https://github.com/moby/moby/blob/a575b0b1384b2ba89b79cbd7e770fbeb616758b3/profiles/apparmor/template.go
+
+Seccomp provides the ability to limit which system calls can be made, blocking aspects such as installing Kernel Modules or changing the file permissions.
+> Seccomp提供了限制可以进行哪些系统调用的功能，阻止安装内核模块或更改文件权限等方面。
+
+The default allowed calls with Docker can be found at
+> 默认允许的Docker调用可以在
+
+https://github.com/moby/moby/blob/a575b0b1384b2ba89b79cbd7e770fbeb616758b3/profiles/seccomp/default.json
+
+When assigned to a process it means the process will be limited to a subset of the ability system calls. If it attempts to call a blocked system call is will recieve the error "Operation Not Allowed".
+> 当分配给一个进程时，这意味着该进程将被限制到能力系统调用的一个子集。如果它试图调用一个阻塞的系统调用，则会收到错误“操作不允许”。
+
+The status of SecComp is also defined within a file.
+> SecComp的状态也在文件中定义。
+
+`cat /proc/$DBPID/status`
+
+`cat /proc/$DBPID/status | grep Seccomp`
+
+The flag meaning are: 0: disabled 1: strict 2: filtering
+> 标志含义为：0:禁用 1:严格 2:过滤
 
 
+#### Capabilities 功能
+Capabilities are groupings about what a process or user has permission to do. These Capabilities might cover multiple system calls or actions, such as changing the system time or hostname.
+> 功能是关于进程或用户有权做什么的分组。这些功能可能包含多个系统调用或操作，例如更改系统时间或主机名。
 
+The status file also containers the Capabilities flag. A process can drop as many Capabilities as possible to ensure it's secure.
+> 状态文件还包含Capabilities标志。一个进程可以丢弃尽可能多的功能以确保它的安全性。
+
+`cat /proc/$DBPID/status | grep ^Cap`
+
+The flags are stored as a bitmask that can be decoded with capsh
+> 这些标志存储为位掩码，可以用capsh进行解码
+
+`capsh --decode=00000000a80425fb`
 
 
 ```sh
