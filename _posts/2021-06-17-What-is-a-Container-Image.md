@@ -39,9 +39,9 @@ All of the layer tar files are now viewable.
 The image also includes metadata about the image, such as version information and tag names.
 > 镜像还包括有关镜像的元数据，如版本信息和标记名称。
 
-cat repositories
+`cat repositories`
 
-cat manifest.json
+`cat manifest.json`
 
 Extracting a layer will show you which files that layer provides.
 > 提取一个层将显示该层提供哪些文件。
